@@ -6,23 +6,12 @@
 #include <unordered_map>
 #include <vector>
 
+bool gPropAnsiMode = false;
+
 struct PropTextEntry {
 	std::string path;
 	String* pValue;
 };
-
-static std::string PropTextEscape(const String& src) {
-	std::string out;
-	out.reserve(src.size());
-	for (char c : src) {
-		if (c == '\\') out += "\\\\";
-		else if (c == '\n') out += "\\n";
-		else if (c == '\r') out += "\\r";
-		else if (c == '\t') out += "\\t";
-		else out += c;
-	}
-	return out;
-}
 
 static std::string PropTextUnescape(const std::string& src) {
 	std::string out;
@@ -39,6 +28,22 @@ static std::string PropTextUnescape(const std::string& src) {
 		else out += c;
 	}
 	return out;
+}
+
+
+static std::string GuessLanguageFromPath(const std::string& path) {
+	std::string lower = lowercase(path);
+	if (lower.find("english") != std::string::npos) return "English";
+	if (lower.find("french") != std::string::npos) return "French";
+	if (lower.find("german") != std::string::npos) return "German";
+	if (lower.find("italian") != std::string::npos) return "Italian";
+	if (lower.find("spanish") != std::string::npos) return "Spanish";
+	if (lower.find("portuguese") != std::string::npos) return "Portuguese";
+	if (lower.find("russian") != std::string::npos) return "Russian";
+	if (lower.find("japanese") != std::string::npos) return "Japanese";
+	if (lower.find("chinese") != std::string::npos) return "Chinese";
+	if (lower.find("korean") != std::string::npos) return "Korean";
+	return "Unknown";
 }
 
 static void CollectPropStringsRecursive(MetaClassDescription* pType, void* pValue, const std::string& path, std::vector<PropTextEntry>& out, int depth = 0) {
@@ -101,16 +106,25 @@ static void CollectPropStringsRecursive(MetaClassDescription* pType, void* pValu
 	}
 }
 
-static bool ExportPropStringsToTextFile(PropertySet& prop, const std::string& outPath, int* outCount) {
+static bool ExportPropStringsToTextFile(PropertySet& prop, const std::string& outPath, int* outCount, bool bAnsiMode) {
 	std::vector<PropTextEntry> entries;
 	CollectPropStringsRecursive(GetMetaClassDescription<PropertySet>(), &prop, "prop", entries);
 	std::ofstream out(outPath, std::ios::out | std::ios::trunc);
 	if (!out.is_open())
 		return false;
-	out << "# TelltaleInspector PROP text export v1\n";
-	out << "# path\tvalue(escaped)\n";
-	for (auto& entry : entries) {
-		out << entry.path << "\t" << PropTextEscape(*entry.pValue) << "\n";
+
+	out << "# TelltaleInspector PROP text export v2\n";
+	out << "# ENCODING: " << (bAnsiMode ? "ANSI" : "UTF8") << "\n";
+	out << "# Edit only between [TEXT] and [/TEXT].\n\n";
+
+	for (size_t i = 0; i < entries.size(); i++) {
+		auto& entry = entries[i];
+		out << "===== ENTRY " << (i + 1) << " =====\n";
+		out << "# PATH: " << entry.path << "\n";
+		out << "# LANGUAGE: " << GuessLanguageFromPath(entry.path) << "\n";
+		out << "[TEXT]\n";
+		out << std::string(*entry.pValue) << "\n";
+		out << "[/TEXT]\n\n";
 	}
 	out.close();
 	if (outCount)
@@ -118,20 +132,59 @@ static bool ExportPropStringsToTextFile(PropertySet& prop, const std::string& ou
 	return true;
 }
 
-static bool ImportPropStringsFromTextFile(PropertySet& prop, const std::string& inPath, int* outUpdated) {
+static bool ImportPropStringsFromTextFile(PropertySet& prop, const std::string& inPath, int* outUpdated, bool bForceAnsiMode) {
 	std::ifstream in(inPath);
 	if (!in.is_open())
 		return false;
 
 	std::unordered_map<std::string, std::string> updates;
 	std::string line;
+	std::string currentPath;
+	std::string currentText;
+	bool readingText = false;
+	bool bAnsiMode = bForceAnsiMode;
+
 	while (std::getline(in, line)) {
-		if (line.empty() || line[0] == '#')
+		if (readingText) {
+			if (line == "[/TEXT]") {
+				if (!currentPath.empty())
+					updates[currentPath] = currentText;
+				currentPath.clear();
+				currentText.clear();
+				readingText = false;
+			}
+			else {
+				if (!currentText.empty())
+					currentText += "\n";
+				currentText += line;
+			}
 			continue;
-		size_t tab = line.find('\t');
-		if (tab == std::string::npos)
+		}
+
+		if (starts_with("# PATH:", line.c_str())) {
+			currentPath = line.substr(7);
+			while (!currentPath.empty() && currentPath[0] == ' ')
+				currentPath.erase(currentPath.begin());
 			continue;
-		updates[line.substr(0, tab)] = PropTextUnescape(line.substr(tab + 1));
+		}
+
+		if (starts_with("# ENCODING:", line.c_str())) {
+			std::string enc = lowercase(line.substr(11));
+			bAnsiMode = (enc.find("ansi") != std::string::npos);
+			continue;
+		}
+
+		if (line == "[TEXT]") {
+			readingText = true;
+			currentText.clear();
+			continue;
+		}
+
+		if (!line.empty() && line[0] != '#') {
+			size_t tab = line.find('	');
+			if (tab != std::string::npos)
+				updates[line.substr(0, tab)] = PropTextUnescape(line.substr(tab + 1));
+		}
 	}
 	in.close();
 
@@ -140,8 +193,11 @@ static bool ImportPropStringsFromTextFile(PropertySet& prop, const std::string& 
 	int changed = 0;
 	for (auto& entry : entries) {
 		auto it = updates.find(entry.path);
-		if (it != updates.end() && *entry.pValue != it->second.c_str()) {
-			*entry.pValue = it->second.c_str();
+		if (it != updates.end()) {
+			std::string decoded = bAnsiMode ? it->second : it->second;
+			if (*entry.pValue == decoded.c_str())
+				continue;
+			*entry.pValue = decoded.c_str();
 			changed++;
 		}
 	}
@@ -272,10 +328,14 @@ void PropTask::_render() {
 		PropertySet& prop = Props();
 		ImGui::SameLine();
 		if (ImGui::Button("Extract PROP to TXT")) {
+			std::string suggestedTxtName = prop_name.empty() ? "prop_export" : prop_name;
+			if (ends_with(suggestedTxtName, ".prop"))
+				suggestedTxtName = suggestedTxtName.substr(0, suggestedTxtName.size() - 5);
+			suggestedTxtName += ".txt";
 			nfdchar_t* outPath{};
-			if (NFD_SaveDialog("txt", 0, &outPath, L"Select output TXT") == NFD_OKAY) {
+			if (NFD_SaveDialog("txt", suggestedTxtName.c_str(), &outPath, L"Select output TXT") == NFD_OKAY) {
 				int exportedCount = 0;
-				if (ExportPropStringsToTextFile(prop, std::filesystem::path{ outPath }.string(), &exportedCount)) {
+				if (ExportPropStringsToTextFile(prop, std::filesystem::path{ outPath }.string(), &exportedCount, gPropAnsiMode)) {
 					std::string msg = "Exported ";
 					msg += std::to_string(exportedCount);
 					msg += " text entries to TXT.";
@@ -292,7 +352,7 @@ void PropTask::_render() {
 			nfdchar_t* inPath{};
 			if (NFD_OpenDialog("txt", 0, &inPath) == NFD_OKAY) {
 				int updatedCount = 0;
-				if (ImportPropStringsFromTextFile(prop, std::filesystem::path{ inPath }.string(), &updatedCount)) {
+				if (ImportPropStringsFromTextFile(prop, std::filesystem::path{ inPath }.string(), &updatedCount, gPropAnsiMode)) {
 					std::string msg = "Updated ";
 					msg += std::to_string(updatedCount);
 					msg += " text entries from TXT.";
@@ -303,6 +363,10 @@ void PropTask::_render() {
 				}
 				free(inPath);
 			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(gPropAnsiMode ? "ANSI Mode: ON" : "ANSI Mode: OFF")) {
+			gPropAnsiMode = !gPropAnsiMode;
 		}
 		ImGui::Separator();
 		ImGui::SetWindowFontScale(1.3f);

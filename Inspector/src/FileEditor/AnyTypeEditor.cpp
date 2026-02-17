@@ -5,8 +5,47 @@
 #include "ToolLibrary/Types/D3DMesh.h"
 #include "../nfd.h"
 #include "imgui_internal.h"
+#include <Windows.h>
 
 // Base UI for PROPS and any type viewer with ImGui
+
+
+static std::string AnyType_AnsiToUtf8(const std::string& ansi) {
+	if (ansi.empty())
+		return {};
+	int wideLen = MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), (int)ansi.size(), nullptr, 0);
+	if (wideLen <= 0)
+		return ansi;
+	std::wstring wide;
+	wide.resize((size_t)wideLen);
+	MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), (int)ansi.size(), wide.data(), wideLen);
+	int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wideLen, nullptr, 0, nullptr, nullptr);
+	if (utf8Len <= 0)
+		return ansi;
+	std::string utf8;
+	utf8.resize((size_t)utf8Len);
+	WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wideLen, utf8.data(), utf8Len, nullptr, nullptr);
+	return utf8;
+}
+
+static std::string AnyType_Utf8ToAnsi(const std::string& utf8) {
+	if (utf8.empty())
+		return {};
+	int wideLen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), nullptr, 0);
+	if (wideLen <= 0)
+		return utf8;
+	std::wstring wide;
+	wide.resize((size_t)wideLen);
+	MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), wide.data(), wideLen);
+	int ansiLen = WideCharToMultiByte(CP_ACP, 0, wide.c_str(), wideLen, nullptr, 0, "?", nullptr);
+	if (ansiLen <= 0)
+		return utf8;
+	std::string ansi;
+	ansi.resize((size_t)ansiLen);
+	WideCharToMultiByte(CP_ACP, 0, wide.c_str(), wideLen, ansi.data(), ansiLen, "?", nullptr);
+	return ansi;
+}
+
 
 bool AnyTypeEditor::Math(u64 hash, void* pInst) {
 	ImGui::PushID(pInst);
@@ -735,7 +774,17 @@ void AnyTypeEditor::TreeItem(MetaClassDescription* clazz, void* pRawData, std::s
 						ImGui::Checkbox("##value", (bool*)pInst);
 					}
 					else if (typeHash == hash_str) {
-						ImGui::InputText("##value", (String*)pInst);
+						if (gPropAnsiMode) {
+							String* pStr = (String*)pInst;
+							std::string displayValue = AnyType_AnsiToUtf8(*pStr);
+							if (ImGui::InputText("##value", &displayValue)) {
+								std::string ansiValue = AnyType_Utf8ToAnsi(displayValue);
+								*pStr = ansiValue.c_str();
+							}
+						}
+						else {
+							ImGui::InputText("##value", (String*)pInst);
+						}
 					}
 					else if (typeHash == hash_sym) {
 						if ((ImGui::Button("Modify Symbol Value") && mod_sym_inst == 0) || (mod_sym_inst == pInst && pInst != 0))
