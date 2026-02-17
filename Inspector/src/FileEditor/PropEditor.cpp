@@ -315,8 +315,12 @@ void PropTask::_render() {
 		PropertySet& prop = Props();
 		ImGui::SameLine();
 		if (ImGui::Button("Extract PROP to TXT")) {
+			std::string suggestedTxtName = prop_name.empty() ? "prop_export" : prop_name;
+			if (ends_with(suggestedTxtName, ".prop"))
+				suggestedTxtName = suggestedTxtName.substr(0, suggestedTxtName.size() - 5);
+			suggestedTxtName += ".txt";
 			nfdchar_t* outPath{};
-			if (NFD_SaveDialog("txt", 0, &outPath, L"Select output TXT") == NFD_OKAY) {
+			if (NFD_SaveDialog("txt", suggestedTxtName.c_str(), &outPath, L"Select output TXT") == NFD_OKAY) {
 				int exportedCount = 0;
 				if (ExportPropStringsToTextFile(prop, std::filesystem::path{ outPath }.string(), &exportedCount)) {
 					std::string msg = "Exported ";
