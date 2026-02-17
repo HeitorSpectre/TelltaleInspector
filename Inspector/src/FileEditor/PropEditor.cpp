@@ -5,7 +5,6 @@
 
 #include <unordered_map>
 #include <vector>
-#include <Windows.h>
 
 bool gPropAnsiMode = false;
 
@@ -13,42 +12,6 @@ struct PropTextEntry {
 	std::string path;
 	String* pValue;
 };
-
-static std::string ConvertAnsiToUtf8(const std::string& ansi) {
-	if (ansi.empty())
-		return {};
-	int wideLen = MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), (int)ansi.size(), nullptr, 0);
-	if (wideLen <= 0)
-		return ansi;
-	std::wstring wide;
-	wide.resize((size_t)wideLen);
-	MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), (int)ansi.size(), wide.data(), wideLen);
-	int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wideLen, nullptr, 0, nullptr, nullptr);
-	if (utf8Len <= 0)
-		return ansi;
-	std::string utf8;
-	utf8.resize((size_t)utf8Len);
-	WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wideLen, utf8.data(), utf8Len, nullptr, nullptr);
-	return utf8;
-}
-
-static std::string ConvertUtf8ToAnsi(const std::string& utf8) {
-	if (utf8.empty())
-		return {};
-	int wideLen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), nullptr, 0);
-	if (wideLen <= 0)
-		return utf8;
-	std::wstring wide;
-	wide.resize((size_t)wideLen);
-	MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), wide.data(), wideLen);
-	int ansiLen = WideCharToMultiByte(CP_ACP, 0, wide.c_str(), wideLen, nullptr, 0, "?", nullptr);
-	if (ansiLen <= 0)
-		return utf8;
-	std::string ansi;
-	ansi.resize((size_t)ansiLen);
-	WideCharToMultiByte(CP_ACP, 0, wide.c_str(), wideLen, ansi.data(), ansiLen, "?", nullptr);
-	return ansi;
-}
 
 static std::string PropTextUnescape(const std::string& src) {
 	std::string out;
@@ -160,7 +123,7 @@ static bool ExportPropStringsToTextFile(PropertySet& prop, const std::string& ou
 		out << "# PATH: " << entry.path << "\n";
 		out << "# LANGUAGE: " << GuessLanguageFromPath(entry.path) << "\n";
 		out << "[TEXT]\n";
-		out << (bAnsiMode ? ConvertUtf8ToAnsi(*entry.pValue) : std::string(*entry.pValue)) << "\n";
+		out << std::string(*entry.pValue) << "\n";
 		out << "[/TEXT]\n\n";
 	}
 	out.close();
@@ -231,7 +194,7 @@ static bool ImportPropStringsFromTextFile(PropertySet& prop, const std::string& 
 	for (auto& entry : entries) {
 		auto it = updates.find(entry.path);
 		if (it != updates.end()) {
-			std::string decoded = bAnsiMode ? ConvertAnsiToUtf8(it->second) : it->second;
+			std::string decoded = bAnsiMode ? it->second : it->second;
 			if (*entry.pValue == decoded.c_str())
 				continue;
 			*entry.pValue = decoded.c_str();
