@@ -3,6 +3,154 @@
 #include "imgui.h"
 #include "../imstd/imgui_stdlib.h"
 
+#include <unordered_map>
+#include <vector>
+
+struct PropTextEntry {
+	std::string path;
+	String* pValue;
+};
+
+static std::string PropTextEscape(const String& src) {
+	std::string out;
+	out.reserve(src.size());
+	for (char c : src) {
+		if (c == '\\') out += "\\\\";
+		else if (c == '\n') out += "\\n";
+		else if (c == '\r') out += "\\r";
+		else if (c == '\t') out += "\\t";
+		else out += c;
+	}
+	return out;
+}
+
+static std::string PropTextUnescape(const std::string& src) {
+	std::string out;
+	out.reserve(src.size());
+	for (size_t i = 0; i < src.size(); i++) {
+		char c = src[i];
+		if (c == '\\' && (i + 1) < src.size()) {
+			char n = src[++i];
+			if (n == 'n') out += '\n';
+			else if (n == 'r') out += '\r';
+			else if (n == 't') out += '\t';
+			else out += n;
+		}
+		else out += c;
+	}
+	return out;
+}
+
+static void CollectPropStringsRecursive(MetaClassDescription* pType, void* pValue, const std::string& path, std::vector<PropTextEntry>& out, int depth = 0) {
+	if (!pType || !pValue || depth > 32)
+		return;
+
+	if (pType->mHash == hash_str) {
+		out.push_back({ path, (String*)pValue });
+		return;
+	}
+
+	if (IsType(pType, "PropertySet")) {
+		PropertySet* pSet = (PropertySet*)pValue;
+		for (int i = 0; i < pSet->mKeyMap.mSize; i++) {
+			auto* pKey = pSet->mKeyMap.mpStorage + i;
+			if (!pKey->mpValue)
+				continue;
+			std::string keyName = to_symbol(pKey->mKeyName.GetCRC());
+			CollectPropStringsRecursive(pKey->mpValue->mpDataDescription, pKey->mpValue->mpValue, path + "." + keyName, out, depth + 1);
+		}
+		return;
+	}
+
+	if (starts_with("DCArray", pType->mpTypeInfoName)) {
+		auto* pArray = (DCArray<void*>*)pValue;
+		MetaClassDescription* pElem = pArray->GetContainerDataClassDescription();
+		if (!pElem)
+			return;
+		for (int i = 0; i < pArray->GetSize(); i++) {
+			CollectPropStringsRecursive(pElem, pArray->GetElement(i), path + "[" + std::to_string(i) + "]", out, depth + 1);
+		}
+		return;
+	}
+
+	if (starts_with("SArray", pType->mpTypeInfoName)) {
+		auto* pArray = (SArray<void*, 1>*)pValue;
+		MetaClassDescription* pElem = pArray->GetContainerDataDescription();
+		if (!pElem)
+			return;
+		for (int i = 0; i < pArray->NUM_DATA_ELEM; i++) {
+			void* pElemValue = (void*)((char*)pArray->mData + i * pElem->mClassSize);
+			CollectPropStringsRecursive(pElem, pElemValue, path + "[" + std::to_string(i) + "]", out, depth + 1);
+		}
+		return;
+	}
+
+	if (starts_with("Map", pType->mpTypeInfoName)) {
+		auto* pMap = (Map<void*, void*>*)pValue;
+		MetaClassDescription* pValDesc = pMap->GetContainerDataClassDescription();
+		if (!pValDesc)
+			return;
+		for (int i = 0; i < pMap->GetSize(); i++) {
+			CollectPropStringsRecursive(pValDesc, pMap->GetVal(i), path + "{" + std::to_string(i) + "}", out, depth + 1);
+		}
+		return;
+	}
+
+	for (MetaMemberDescription* pMem = pType->mpFirstMember; pMem; pMem = pMem->mpNextMember) {
+		CollectPropStringsRecursive(pMem->mpMemberDesc, (char*)pValue + pMem->mOffset, path + "." + pMem->mpName, out, depth + 1);
+	}
+}
+
+static bool ExportPropStringsToTextFile(PropertySet& prop, const std::string& outPath, int* outCount) {
+	std::vector<PropTextEntry> entries;
+	CollectPropStringsRecursive(GetMetaClassDescription<PropertySet>(), &prop, "prop", entries);
+	std::ofstream out(outPath, std::ios::out | std::ios::trunc);
+	if (!out.is_open())
+		return false;
+	out << "# TelltaleInspector PROP text export v1\n";
+	out << "# path\tvalue(escaped)\n";
+	for (auto& entry : entries) {
+		out << entry.path << "\t" << PropTextEscape(*entry.pValue) << "\n";
+	}
+	out.close();
+	if (outCount)
+		*outCount = (int)entries.size();
+	return true;
+}
+
+static bool ImportPropStringsFromTextFile(PropertySet& prop, const std::string& inPath, int* outUpdated) {
+	std::ifstream in(inPath);
+	if (!in.is_open())
+		return false;
+
+	std::unordered_map<std::string, std::string> updates;
+	std::string line;
+	while (std::getline(in, line)) {
+		if (line.empty() || line[0] == '#')
+			continue;
+		size_t tab = line.find('\t');
+		if (tab == std::string::npos)
+			continue;
+		updates[line.substr(0, tab)] = PropTextUnescape(line.substr(tab + 1));
+	}
+	in.close();
+
+	std::vector<PropTextEntry> entries;
+	CollectPropStringsRecursive(GetMetaClassDescription<PropertySet>(), &prop, "prop", entries);
+	int changed = 0;
+	for (auto& entry : entries) {
+		auto it = updates.find(entry.path);
+		if (it != updates.end() && *entry.pValue != it->second.c_str()) {
+			*entry.pValue = it->second.c_str();
+			changed++;
+		}
+	}
+
+	if (outUpdated)
+		*outUpdated = changed;
+	return true;
+}
+
 void PropTask::_render() {
 	//TODO EMBEDDED PROPS
 	lister.frame_check_addrem = true;
@@ -122,6 +270,40 @@ void PropTask::_render() {
 			}
 		}
 		PropertySet& prop = Props();
+		ImGui::SameLine();
+		if (ImGui::Button("Extract PROP to TXT")) {
+			nfdchar_t* outPath{};
+			if (NFD_SaveDialog("txt", 0, &outPath, L"Select output TXT") == NFD_OKAY) {
+				int exportedCount = 0;
+				if (ExportPropStringsToTextFile(prop, std::filesystem::path{ outPath }.string(), &exportedCount)) {
+					std::string msg = "Exported ";
+					msg += std::to_string(exportedCount);
+					msg += " text entries to TXT.";
+					MessageBoxA(0, msg.c_str(), "Success", MB_ICONINFORMATION);
+				}
+				else {
+					MessageBoxA(0, "Could not write the output TXT file.", "Error", MB_ICONERROR);
+				}
+				free(outPath);
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Reinsert TXT to PROP")) {
+			nfdchar_t* inPath{};
+			if (NFD_OpenDialog("txt", 0, &inPath) == NFD_OKAY) {
+				int updatedCount = 0;
+				if (ImportPropStringsFromTextFile(prop, std::filesystem::path{ inPath }.string(), &updatedCount)) {
+					std::string msg = "Updated ";
+					msg += std::to_string(updatedCount);
+					msg += " text entries from TXT.";
+					MessageBoxA(0, msg.c_str(), "Success", MB_ICONINFORMATION);
+				}
+				else {
+					MessageBoxA(0, "Could not open/read the selected TXT file.", "Error", MB_ICONERROR);
+				}
+				free(inPath);
+			}
+		}
 		ImGui::Separator();
 		ImGui::SetWindowFontScale(1.3f);
 		ImGui::Text("Parent Property Files");
