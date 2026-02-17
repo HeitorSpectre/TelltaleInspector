@@ -5,11 +5,50 @@
 
 #include <unordered_map>
 #include <vector>
+#include <Windows.h>
+
+static bool sPropTxtAnsiMode = false;
 
 struct PropTextEntry {
 	std::string path;
 	String* pValue;
 };
+
+static std::string ConvertAnsiToUtf8(const std::string& ansi) {
+	if (ansi.empty())
+		return {};
+	int wideLen = MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), (int)ansi.size(), nullptr, 0);
+	if (wideLen <= 0)
+		return ansi;
+	std::wstring wide;
+	wide.resize((size_t)wideLen);
+	MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), (int)ansi.size(), wide.data(), wideLen);
+	int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wideLen, nullptr, 0, nullptr, nullptr);
+	if (utf8Len <= 0)
+		return ansi;
+	std::string utf8;
+	utf8.resize((size_t)utf8Len);
+	WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), wideLen, utf8.data(), utf8Len, nullptr, nullptr);
+	return utf8;
+}
+
+static std::string ConvertUtf8ToAnsi(const std::string& utf8) {
+	if (utf8.empty())
+		return {};
+	int wideLen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), nullptr, 0);
+	if (wideLen <= 0)
+		return utf8;
+	std::wstring wide;
+	wide.resize((size_t)wideLen);
+	MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), wide.data(), wideLen);
+	int ansiLen = WideCharToMultiByte(CP_ACP, 0, wide.c_str(), wideLen, nullptr, 0, "?", nullptr);
+	if (ansiLen <= 0)
+		return utf8;
+	std::string ansi;
+	ansi.resize((size_t)ansiLen);
+	WideCharToMultiByte(CP_ACP, 0, wide.c_str(), wideLen, ansi.data(), ansiLen, "?", nullptr);
+	return ansi;
+}
 
 static std::string PropTextUnescape(const std::string& src) {
 	std::string out;
@@ -104,7 +143,7 @@ static void CollectPropStringsRecursive(MetaClassDescription* pType, void* pValu
 	}
 }
 
-static bool ExportPropStringsToTextFile(PropertySet& prop, const std::string& outPath, int* outCount) {
+static bool ExportPropStringsToTextFile(PropertySet& prop, const std::string& outPath, int* outCount, bool bAnsiMode) {
 	std::vector<PropTextEntry> entries;
 	CollectPropStringsRecursive(GetMetaClassDescription<PropertySet>(), &prop, "prop", entries);
 	std::ofstream out(outPath, std::ios::out | std::ios::trunc);
@@ -112,6 +151,7 @@ static bool ExportPropStringsToTextFile(PropertySet& prop, const std::string& ou
 		return false;
 
 	out << "# TelltaleInspector PROP text export v2\n";
+	out << "# ENCODING: " << (bAnsiMode ? "ANSI" : "UTF8") << "\n";
 	out << "# Edit only between [TEXT] and [/TEXT].\n\n";
 
 	for (size_t i = 0; i < entries.size(); i++) {
@@ -120,7 +160,7 @@ static bool ExportPropStringsToTextFile(PropertySet& prop, const std::string& ou
 		out << "# PATH: " << entry.path << "\n";
 		out << "# LANGUAGE: " << GuessLanguageFromPath(entry.path) << "\n";
 		out << "[TEXT]\n";
-		out << *entry.pValue << "\n";
+		out << (bAnsiMode ? ConvertUtf8ToAnsi(*entry.pValue) : std::string(*entry.pValue)) << "\n";
 		out << "[/TEXT]\n\n";
 	}
 	out.close();
@@ -129,7 +169,7 @@ static bool ExportPropStringsToTextFile(PropertySet& prop, const std::string& ou
 	return true;
 }
 
-static bool ImportPropStringsFromTextFile(PropertySet& prop, const std::string& inPath, int* outUpdated) {
+static bool ImportPropStringsFromTextFile(PropertySet& prop, const std::string& inPath, int* outUpdated, bool bForceAnsiMode) {
 	std::ifstream in(inPath);
 	if (!in.is_open())
 		return false;
@@ -139,6 +179,7 @@ static bool ImportPropStringsFromTextFile(PropertySet& prop, const std::string& 
 	std::string currentPath;
 	std::string currentText;
 	bool readingText = false;
+	bool bAnsiMode = bForceAnsiMode;
 
 	while (std::getline(in, line)) {
 		if (readingText) {
@@ -164,6 +205,12 @@ static bool ImportPropStringsFromTextFile(PropertySet& prop, const std::string& 
 			continue;
 		}
 
+		if (starts_with("# ENCODING:", line.c_str())) {
+			std::string enc = lowercase(line.substr(11));
+			bAnsiMode = (enc.find("ansi") != std::string::npos);
+			continue;
+		}
+
 		if (line == "[TEXT]") {
 			readingText = true;
 			currentText.clear();
@@ -183,8 +230,11 @@ static bool ImportPropStringsFromTextFile(PropertySet& prop, const std::string& 
 	int changed = 0;
 	for (auto& entry : entries) {
 		auto it = updates.find(entry.path);
-		if (it != updates.end() && *entry.pValue != it->second.c_str()) {
-			*entry.pValue = it->second.c_str();
+		if (it != updates.end()) {
+			std::string decoded = bAnsiMode ? ConvertAnsiToUtf8(it->second) : it->second;
+			if (*entry.pValue == decoded.c_str())
+				continue;
+			*entry.pValue = decoded.c_str();
 			changed++;
 		}
 	}
@@ -322,7 +372,7 @@ void PropTask::_render() {
 			nfdchar_t* outPath{};
 			if (NFD_SaveDialog("txt", suggestedTxtName.c_str(), &outPath, L"Select output TXT") == NFD_OKAY) {
 				int exportedCount = 0;
-				if (ExportPropStringsToTextFile(prop, std::filesystem::path{ outPath }.string(), &exportedCount)) {
+				if (ExportPropStringsToTextFile(prop, std::filesystem::path{ outPath }.string(), &exportedCount, sPropTxtAnsiMode)) {
 					std::string msg = "Exported ";
 					msg += std::to_string(exportedCount);
 					msg += " text entries to TXT.";
@@ -339,7 +389,7 @@ void PropTask::_render() {
 			nfdchar_t* inPath{};
 			if (NFD_OpenDialog("txt", 0, &inPath) == NFD_OKAY) {
 				int updatedCount = 0;
-				if (ImportPropStringsFromTextFile(prop, std::filesystem::path{ inPath }.string(), &updatedCount)) {
+				if (ImportPropStringsFromTextFile(prop, std::filesystem::path{ inPath }.string(), &updatedCount, sPropTxtAnsiMode)) {
 					std::string msg = "Updated ";
 					msg += std::to_string(updatedCount);
 					msg += " text entries from TXT.";
@@ -350,6 +400,10 @@ void PropTask::_render() {
 				}
 				free(inPath);
 			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(sPropTxtAnsiMode ? "ANSI Mode: ON" : "ANSI Mode: OFF")) {
+			sPropTxtAnsiMode = !sPropTxtAnsiMode;
 		}
 		ImGui::Separator();
 		ImGui::SetWindowFontScale(1.3f);
