@@ -3,6 +3,197 @@
 #include "imgui.h"
 #include "../imstd/imgui_stdlib.h"
 
+#include <unordered_map>
+#include <vector>
+
+struct PropTextEntry {
+	std::string path;
+	String* pValue;
+};
+
+static std::string PropTextUnescape(const std::string& src) {
+	std::string out;
+	out.reserve(src.size());
+	for (size_t i = 0; i < src.size(); i++) {
+		char c = src[i];
+		if (c == '\\' && (i + 1) < src.size()) {
+			char n = src[++i];
+			if (n == 'n') out += '\n';
+			else if (n == 'r') out += '\r';
+			else if (n == 't') out += '\t';
+			else out += n;
+		}
+		else out += c;
+	}
+	return out;
+}
+
+
+static std::string GuessLanguageFromPath(const std::string& path) {
+	std::string lower = lowercase(path);
+	if (lower.find("english") != std::string::npos) return "English";
+	if (lower.find("french") != std::string::npos) return "French";
+	if (lower.find("german") != std::string::npos) return "German";
+	if (lower.find("italian") != std::string::npos) return "Italian";
+	if (lower.find("spanish") != std::string::npos) return "Spanish";
+	if (lower.find("portuguese") != std::string::npos) return "Portuguese";
+	if (lower.find("russian") != std::string::npos) return "Russian";
+	if (lower.find("japanese") != std::string::npos) return "Japanese";
+	if (lower.find("chinese") != std::string::npos) return "Chinese";
+	if (lower.find("korean") != std::string::npos) return "Korean";
+	return "Unknown";
+}
+
+static void CollectPropStringsRecursive(MetaClassDescription* pType, void* pValue, const std::string& path, std::vector<PropTextEntry>& out, int depth = 0) {
+	if (!pType || !pValue || depth > 32)
+		return;
+
+	if (pType->mHash == hash_str) {
+		out.push_back({ path, (String*)pValue });
+		return;
+	}
+
+	if (IsType(pType, "PropertySet")) {
+		PropertySet* pSet = (PropertySet*)pValue;
+		for (int i = 0; i < pSet->mKeyMap.mSize; i++) {
+			auto* pKey = pSet->mKeyMap.mpStorage + i;
+			if (!pKey->mpValue)
+				continue;
+			std::string keyName = to_symbol(pKey->mKeyName.GetCRC());
+			CollectPropStringsRecursive(pKey->mpValue->mpDataDescription, pKey->mpValue->mpValue, path + "." + keyName, out, depth + 1);
+		}
+		return;
+	}
+
+	if (starts_with("DCArray", pType->mpTypeInfoName)) {
+		auto* pArray = (DCArray<void*>*)pValue;
+		MetaClassDescription* pElem = pArray->GetContainerDataClassDescription();
+		if (!pElem)
+			return;
+		for (int i = 0; i < pArray->GetSize(); i++) {
+			CollectPropStringsRecursive(pElem, pArray->GetElement(i), path + "[" + std::to_string(i) + "]", out, depth + 1);
+		}
+		return;
+	}
+
+	if (starts_with("SArray", pType->mpTypeInfoName)) {
+		auto* pArray = (SArray<void*, 1>*)pValue;
+		MetaClassDescription* pElem = pArray->GetContainerDataDescription();
+		if (!pElem)
+			return;
+		for (int i = 0; i < pArray->NUM_DATA_ELEM; i++) {
+			void* pElemValue = (void*)((char*)pArray->mData + i * pElem->mClassSize);
+			CollectPropStringsRecursive(pElem, pElemValue, path + "[" + std::to_string(i) + "]", out, depth + 1);
+		}
+		return;
+	}
+
+	if (starts_with("Map", pType->mpTypeInfoName)) {
+		auto* pMap = (Map<void*, void*>*)pValue;
+		MetaClassDescription* pValDesc = pMap->GetContainerDataClassDescription();
+		if (!pValDesc)
+			return;
+		for (int i = 0; i < pMap->GetSize(); i++) {
+			CollectPropStringsRecursive(pValDesc, pMap->GetVal(i), path + "{" + std::to_string(i) + "}", out, depth + 1);
+		}
+		return;
+	}
+
+	for (MetaMemberDescription* pMem = pType->mpFirstMember; pMem; pMem = pMem->mpNextMember) {
+		CollectPropStringsRecursive(pMem->mpMemberDesc, (char*)pValue + pMem->mOffset, path + "." + pMem->mpName, out, depth + 1);
+	}
+}
+
+static bool ExportPropStringsToTextFile(PropertySet& prop, const std::string& outPath, int* outCount) {
+	std::vector<PropTextEntry> entries;
+	CollectPropStringsRecursive(GetMetaClassDescription<PropertySet>(), &prop, "prop", entries);
+	std::ofstream out(outPath, std::ios::out | std::ios::trunc);
+	if (!out.is_open())
+		return false;
+
+	out << "# TelltaleInspector PROP text export v2\n";
+	out << "# Edit only between [TEXT] and [/TEXT].\n\n";
+
+	for (size_t i = 0; i < entries.size(); i++) {
+		auto& entry = entries[i];
+		out << "===== ENTRY " << (i + 1) << " =====\n";
+		out << "# PATH: " << entry.path << "\n";
+		out << "# LANGUAGE: " << GuessLanguageFromPath(entry.path) << "\n";
+		out << "[TEXT]\n";
+		out << *entry.pValue << "\n";
+		out << "[/TEXT]\n\n";
+	}
+	out.close();
+	if (outCount)
+		*outCount = (int)entries.size();
+	return true;
+}
+
+static bool ImportPropStringsFromTextFile(PropertySet& prop, const std::string& inPath, int* outUpdated) {
+	std::ifstream in(inPath);
+	if (!in.is_open())
+		return false;
+
+	std::unordered_map<std::string, std::string> updates;
+	std::string line;
+	std::string currentPath;
+	std::string currentText;
+	bool readingText = false;
+
+	while (std::getline(in, line)) {
+		if (readingText) {
+			if (line == "[/TEXT]") {
+				if (!currentPath.empty())
+					updates[currentPath] = currentText;
+				currentPath.clear();
+				currentText.clear();
+				readingText = false;
+			}
+			else {
+				if (!currentText.empty())
+					currentText += "\n";
+				currentText += line;
+			}
+			continue;
+		}
+
+		if (starts_with("# PATH:", line.c_str())) {
+			currentPath = line.substr(7);
+			while (!currentPath.empty() && currentPath[0] == ' ')
+				currentPath.erase(currentPath.begin());
+			continue;
+		}
+
+		if (line == "[TEXT]") {
+			readingText = true;
+			currentText.clear();
+			continue;
+		}
+
+		if (!line.empty() && line[0] != '#') {
+			size_t tab = line.find('	');
+			if (tab != std::string::npos)
+				updates[line.substr(0, tab)] = PropTextUnescape(line.substr(tab + 1));
+		}
+	}
+	in.close();
+
+	std::vector<PropTextEntry> entries;
+	CollectPropStringsRecursive(GetMetaClassDescription<PropertySet>(), &prop, "prop", entries);
+	int changed = 0;
+	for (auto& entry : entries) {
+		auto it = updates.find(entry.path);
+		if (it != updates.end() && *entry.pValue != it->second.c_str()) {
+			*entry.pValue = it->second.c_str();
+			changed++;
+		}
+	}
+
+	if (outUpdated)
+		*outUpdated = changed;
+	return true;
+}
+
 void PropTask::_render() {
 	//TODO EMBEDDED PROPS
 	lister.frame_check_addrem = true;
@@ -26,8 +217,14 @@ void PropTask::_render() {
 			TelltaleToolLib_SetBlowfishKey(game);
 			nfdchar_t* outp = nullptr;
 			if (NFD_OpenDialog("prop", 0, &outp) == NFD_OKAY) {
+				std::string propPath = std::filesystem::path{ outp }.string();
+				free(outp);
 				MetaStream mTempStream{};
-				DataStreamFileDisc* prop = OpenDataStreamFromDisc(outp, READ);
+				DataStreamFileDisc* prop = _OpenDataStreamFromDisc(propPath.c_str(), READ);
+				if (!prop) {
+					MessageBoxA(0, "Could not open the selected prop file for reading.", "Error", MB_ICONERROR);
+					return;
+				}
 				mTempStream.Open(prop, MetaStreamMode::eMetaStream_Read, {});
 				if (mTempStream.mbErrored) {
 					MessageBoxA(0, "Could not open the prop file (meta stream error). Please contact me, using the contact tab above.", "Error", MB_ICONERROR);
@@ -41,7 +238,7 @@ void PropTask::_render() {
 						PropertySet* pDestProps = &Props();
 						if (!imp_yet) {
 							imp_yet = true;
-							prop_name = std::filesystem::path{ outp }.filename().string();
+							prop_name = std::filesystem::path{ propPath }.filename().string();
 							pDestProps->mPropVersion = tempProp.mPropVersion;
 							pDestProps->mPropertyFlags = 0;
 						}
@@ -116,6 +313,40 @@ void PropTask::_render() {
 			}
 		}
 		PropertySet& prop = Props();
+		ImGui::SameLine();
+		if (ImGui::Button("Extract PROP to TXT")) {
+			nfdchar_t* outPath{};
+			if (NFD_SaveDialog("txt", 0, &outPath, L"Select output TXT") == NFD_OKAY) {
+				int exportedCount = 0;
+				if (ExportPropStringsToTextFile(prop, std::filesystem::path{ outPath }.string(), &exportedCount)) {
+					std::string msg = "Exported ";
+					msg += std::to_string(exportedCount);
+					msg += " text entries to TXT.";
+					MessageBoxA(0, msg.c_str(), "Success", MB_ICONINFORMATION);
+				}
+				else {
+					MessageBoxA(0, "Could not write the output TXT file.", "Error", MB_ICONERROR);
+				}
+				free(outPath);
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Reinsert TXT to PROP")) {
+			nfdchar_t* inPath{};
+			if (NFD_OpenDialog("txt", 0, &inPath) == NFD_OKAY) {
+				int updatedCount = 0;
+				if (ImportPropStringsFromTextFile(prop, std::filesystem::path{ inPath }.string(), &updatedCount)) {
+					std::string msg = "Updated ";
+					msg += std::to_string(updatedCount);
+					msg += " text entries from TXT.";
+					MessageBoxA(0, msg.c_str(), "Success", MB_ICONINFORMATION);
+				}
+				else {
+					MessageBoxA(0, "Could not open/read the selected TXT file.", "Error", MB_ICONERROR);
+				}
+				free(inPath);
+			}
+		}
 		ImGui::Separator();
 		ImGui::SetWindowFontScale(1.3f);
 		ImGui::Text("Parent Property Files");
