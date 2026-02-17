@@ -26,8 +26,14 @@ void PropTask::_render() {
 			TelltaleToolLib_SetBlowfishKey(game);
 			nfdchar_t* outp = nullptr;
 			if (NFD_OpenDialog("prop", 0, &outp) == NFD_OKAY) {
+				std::string propPath = std::filesystem::path{ outp }.string();
+				free(outp);
 				MetaStream mTempStream{};
-				DataStreamFileDisc* prop = OpenDataStreamFromDisc(outp, READ);
+				DataStreamFileDisc* prop = _OpenDataStreamFromDisc(propPath.c_str(), READ);
+				if (!prop) {
+					MessageBoxA(0, "Could not open the selected prop file for reading.", "Error", MB_ICONERROR);
+					return;
+				}
 				mTempStream.Open(prop, MetaStreamMode::eMetaStream_Read, {});
 				if (mTempStream.mbErrored) {
 					MessageBoxA(0, "Could not open the prop file (meta stream error). Please contact me, using the contact tab above.", "Error", MB_ICONERROR);
@@ -41,7 +47,7 @@ void PropTask::_render() {
 						PropertySet* pDestProps = &Props();
 						if (!imp_yet) {
 							imp_yet = true;
-							prop_name = std::filesystem::path{ outp }.filename().string();
+							prop_name = std::filesystem::path{ propPath }.filename().string();
 							pDestProps->mPropVersion = tempProp.mPropVersion;
 							pDestProps->mPropertyFlags = 0;
 						}
