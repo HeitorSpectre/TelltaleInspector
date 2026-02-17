@@ -33,7 +33,7 @@ Continuous support and testing help from aabi, and my partner in building all of
 Known for this game engine youtube channel, he also not only taught me C++ very well but also provided the backend GUI framework library <strong>Walnut</strong> which means in one line of code I have a GUI. The GUI library used is the iconic Dear ImGui. [TheCherno Youtube](https://www.youtube.com/channel/UCQ-W1KE9EYfdxhL6S4twUNw)
 #### Other Credit
 Other authors code has been used such as the C++ file dialog helper library NFD and more.
-‐-------
+
 #### Fork Credits
-BlueSkyWestSide
+BlueSkyWestSide for fix compilation.
  
