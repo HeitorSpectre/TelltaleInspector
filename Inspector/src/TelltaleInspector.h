@@ -495,6 +495,7 @@ struct InspectorRuntime {
 };
 
 extern InspectorRuntime sRuntime;
+extern bool gPropAnsiMode;
 
 // ==================================================================================== HELPER: ANY TYPE EDITOR ====================================================================================
 

@@ -7,7 +7,7 @@
 #include <vector>
 #include <Windows.h>
 
-static bool sPropTxtAnsiMode = false;
+bool gPropAnsiMode = false;
 
 struct PropTextEntry {
 	std::string path;
@@ -372,7 +372,7 @@ void PropTask::_render() {
 			nfdchar_t* outPath{};
 			if (NFD_SaveDialog("txt", suggestedTxtName.c_str(), &outPath, L"Select output TXT") == NFD_OKAY) {
 				int exportedCount = 0;
-				if (ExportPropStringsToTextFile(prop, std::filesystem::path{ outPath }.string(), &exportedCount, sPropTxtAnsiMode)) {
+				if (ExportPropStringsToTextFile(prop, std::filesystem::path{ outPath }.string(), &exportedCount, gPropAnsiMode)) {
 					std::string msg = "Exported ";
 					msg += std::to_string(exportedCount);
 					msg += " text entries to TXT.";
@@ -389,7 +389,7 @@ void PropTask::_render() {
 			nfdchar_t* inPath{};
 			if (NFD_OpenDialog("txt", 0, &inPath) == NFD_OKAY) {
 				int updatedCount = 0;
-				if (ImportPropStringsFromTextFile(prop, std::filesystem::path{ inPath }.string(), &updatedCount, sPropTxtAnsiMode)) {
+				if (ImportPropStringsFromTextFile(prop, std::filesystem::path{ inPath }.string(), &updatedCount, gPropAnsiMode)) {
 					std::string msg = "Updated ";
 					msg += std::to_string(updatedCount);
 					msg += " text entries from TXT.";
@@ -402,8 +402,8 @@ void PropTask::_render() {
 			}
 		}
 		ImGui::SameLine();
-		if (ImGui::Button(sPropTxtAnsiMode ? "ANSI Mode: ON" : "ANSI Mode: OFF")) {
-			sPropTxtAnsiMode = !sPropTxtAnsiMode;
+		if (ImGui::Button(gPropAnsiMode ? "ANSI Mode: ON" : "ANSI Mode: OFF")) {
+			gPropAnsiMode = !gPropAnsiMode;
 		}
 		ImGui::Separator();
 		ImGui::SetWindowFontScale(1.3f);
