@@ -11,6 +11,9 @@ This is a version of Telltale Inspector fully focused on prop editing, including
 It allows you to extract all text from a prop file into a clean, fully readable TXT format, making editing much easier and more organized. After editing, you can correctly reinsert the TXT back into the prop file without breaking formatting or structure.
 
 The tool also includes an encoding conversion system, allowing you to switch between ANSI and UTF-8 when necessary. This ensures compatibility depending on the specific game, giving you full control over the file’s encoding format.
+
+<img width="854" height="501" alt="image" src="https://github.com/user-attachments/assets/55cf9e47-3d4f-4bef-918e-b44562b1cb65" />
+
 -----------------
 
 ## Credit
