@@ -1061,12 +1061,14 @@ public:
 		imp_yet = true;
 		ext_access_gate = b_access_gate;
 		prop_name = _STD move(name);
+		prop_file_path.clear();
 		ext_user_data = user;
 	}
 private:
 
 	bool* ext_access_gate = nullptr;
 	std::string prop_name;
+	std::string prop_file_path;
 
 	inline PropertySet& Props() {
 		return save_changes == nullptr ? _int.__mNormal : *_int.__mpExternal;
