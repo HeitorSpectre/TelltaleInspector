@@ -232,6 +232,7 @@ void PropTask::_render() {
 			if (NFD_OpenDialog("prop", 0, &outp) == NFD_OKAY) {
 				std::string propPath = std::filesystem::path{ outp }.string();
 				free(outp);
+				prop_file_path = propPath;
 				MetaStream mTempStream{};
 				DataStreamFileDisc* prop = _OpenDataStreamFromDisc(propPath.c_str(), READ);
 				if (!prop) {
@@ -318,6 +319,7 @@ void PropTask::_render() {
 						}
 						else {
 							mTempStream.Close();
+							prop_file_path = pth;
 							MessageBoxA(0, "The property set was exported!", "Success!", MB_ICONINFORMATION);
 						}
 					}
@@ -328,23 +330,29 @@ void PropTask::_render() {
 		PropertySet& prop = Props();
 		ImGui::SameLine();
 		if (ImGui::Button("Extract PROP to TXT")) {
-			std::string suggestedTxtName = prop_name.empty() ? "prop_export" : prop_name;
-			if (ends_with(suggestedTxtName, ".prop"))
-				suggestedTxtName = suggestedTxtName.substr(0, suggestedTxtName.size() - 5);
-			suggestedTxtName += ".txt";
-			nfdchar_t* outPath{};
-			if (NFD_SaveDialog("txt", suggestedTxtName.c_str(), &outPath, L"Select output TXT") == NFD_OKAY) {
-				int exportedCount = 0;
-				if (ExportPropStringsToTextFile(prop, std::filesystem::path{ outPath }.string(), &exportedCount, gPropAnsiMode)) {
-					std::string msg = "Exported ";
-					msg += std::to_string(exportedCount);
-					msg += " text entries to TXT.";
-					MessageBoxA(0, msg.c_str(), "Success", MB_ICONINFORMATION);
-				}
-				else {
-					MessageBoxA(0, "Could not write the output TXT file.", "Error", MB_ICONERROR);
-				}
-				free(outPath);
+			std::filesystem::path propPath{ prop_file_path };
+			std::string txtName = prop_name.empty() ? "prop_export" : prop_name;
+			if (ends_with(txtName, ".prop"))
+				txtName = txtName.substr(0, txtName.size() - 5);
+			txtName += ".txt";
+
+			if (!propPath.empty()) {
+				propPath = propPath.parent_path() / txtName;
+			}
+			else {
+				propPath = txtName;
+			}
+
+			int exportedCount = 0;
+			if (ExportPropStringsToTextFile(prop, propPath.string(), &exportedCount, gPropAnsiMode)) {
+				std::string msg = "Exported ";
+				msg += std::to_string(exportedCount);
+				msg += " text entries to TXT: ";
+				msg += propPath.string();
+				MessageBoxA(0, msg.c_str(), "Success", MB_ICONINFORMATION);
+			}
+			else {
+				MessageBoxA(0, "Could not write the output TXT file.", "Error", MB_ICONERROR);
 			}
 		}
 		ImGui::SameLine();
