@@ -250,6 +250,14 @@ void PropTask::_render() {
 					}
 					else {
 						PropertySet* pDestProps = &Props();
+						if (save_changes == nullptr) {
+							imp_yet = true;
+							prop_name = std::filesystem::path{ propPath }.filename().string();
+							*pDestProps = std::move(tempProp);
+							pDestProps->mPropertyFlags = 0;
+							versionInfo.InjectVersionInfo(mTempStream);
+							return;
+						}
 						if (!imp_yet) {
 							imp_yet = true;
 							prop_name = std::filesystem::path{ propPath }.filename().string();
